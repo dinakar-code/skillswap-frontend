@@ -1,5 +1,11 @@
 # React + Vite
 
+## Deployment
+
+Deploy this directory as a Vercel project with `frontend` as the root directory.
+Set `VITE_API_URL` to the deployed backend API base URL, including `/api`
+(for example, `https://your-backend.onrender.com/api`).
+
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
 Currently, two official plugins are available:
