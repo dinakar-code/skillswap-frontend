@@ -88,11 +88,11 @@ function App() {
     setUser(updatedUser)
   }
 
-  const logout = () => {
+  const logout = useCallback(() => {
     sessionStorage.removeItem('skillswap-token')
     sessionStorage.removeItem('skillswap-user')
     setUser(null)
-  }
+  }, [])
 
   return (
     <BrowserRouter>
@@ -464,6 +464,11 @@ function DashboardPage() {
   const [error, setError] = useState('')
   const [requestActionId, setRequestActionId] = useState(null)
 
+  const handleAuthenticationFailure = useCallback(() => {
+    logout()
+    navigate('/login', { replace: true })
+  }, [logout, navigate])
+
   const loadDashboard = async () => {
     setError('')
     try {
@@ -475,8 +480,7 @@ function DashboardPage() {
       setUserProfile(profileResponse.data)
     } catch (requestError) {
       if (requestError.response?.status === 401 || requestError.response?.status === 403) {
-        logout()
-        navigate('/login', { replace: true })
+        handleAuthenticationFailure()
         return
       }
       setError(requestError.response?.data?.error || requestError.response?.data?.message || 'Could not load your dashboard. Please try again.')
@@ -487,7 +491,7 @@ function DashboardPage() {
 
   useEffect(() => {
     void loadDashboard()
-  }, [])
+  }, [handleAuthenticationFailure])
 
   const respondToRequest = async (requestId, action) => {
     setRequestActionId(requestId)
@@ -581,7 +585,7 @@ function DashboardPage() {
                   </div>
                 )}
                 {request.status === 'ACCEPTED' && (
-                  <ExchangeTools request={request} partner={request.sender} currentUser={user} onSessionScheduled={refreshDashboard} />
+                  <ExchangeTools request={request} partner={request.sender} currentUser={user} onSessionScheduled={refreshDashboard} onAuthenticationFailure={handleAuthenticationFailure} />
                 )}
               </div>
             ))}
@@ -605,7 +609,7 @@ function DashboardPage() {
                   </>
                 )}
                 {request.status === 'ACCEPTED' && (
-                  <ExchangeTools request={request} partner={request.receiver} currentUser={user} onSessionScheduled={refreshDashboard} />
+                  <ExchangeTools request={request} partner={request.receiver} currentUser={user} onSessionScheduled={refreshDashboard} onAuthenticationFailure={handleAuthenticationFailure} />
                 )}
               </div>
             ))}
@@ -649,7 +653,7 @@ function DashboardPage() {
   )
 }
 
-function ExchangeTools({ request, partner, currentUser, onSessionScheduled }) {
+function ExchangeTools({ request, partner, currentUser, onSessionScheduled, onAuthenticationFailure }) {
   const [messages, setMessages] = useState([])
   const [messageInput, setMessageInput] = useState('')
   const [chatError, setChatError] = useState('')
@@ -672,9 +676,13 @@ function ExchangeTools({ request, partner, currentUser, onSessionScheduled }) {
       setMessages(response.data)
       setChatError('')
     } catch (requestError) {
+      if (requestError.response?.status === 401 || requestError.response?.status === 403) {
+        onAuthenticationFailure()
+        return
+      }
       setChatError(requestError.response?.data?.error || requestError.response?.data?.message || 'Could not load this chat.')
     }
-  }, [request.id])
+  }, [request.id, onAuthenticationFailure])
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void loadMessages(), 0)
@@ -696,6 +704,10 @@ function ExchangeTools({ request, partner, currentUser, onSessionScheduled }) {
       setMessageInput('')
       await loadMessages()
     } catch (requestError) {
+      if (requestError.response?.status === 401 || requestError.response?.status === 403) {
+        onAuthenticationFailure()
+        return
+      }
       setChatError(requestError.response?.data?.error || requestError.response?.data?.message || 'Could not send your message.')
     } finally {
       setSending(false)
@@ -791,13 +803,16 @@ function ExchangeTools({ request, partner, currentUser, onSessionScheduled }) {
 }
 
 function ProfilePage() {
-  const { user, setUserProfile } = useAuth()
+  const { user, setUserProfile, logout } = useAuth()
+  const navigate = useNavigate()
   const teachingSkills = user?.teachingSkills || []
   const learningSkills = user?.learningSkills || []
   const [teachingInput, setTeachingInput] = useState('')
   const [learningInput, setLearningInput] = useState('')
   const [skillError, setSkillError] = useState('')
   const [savingSkill, setSavingSkill] = useState(false)
+  const [accountError, setAccountError] = useState('')
+  const [accountBusy, setAccountBusy] = useState(false)
 
   const changeSkill = async (skillName, skillType, action) => {
     setSkillError('')
@@ -821,6 +836,47 @@ function ProfilePage() {
     event.preventDefault()
     const skillName = value.trim()
     if (skillName) void changeSkill(skillName, skillType, 'add')
+  }
+
+  const deactivateProfile = async () => {
+    if (!window.confirm('Hide your profile from student search? Your requests and history will be kept, and you can reactivate at any time.')) return
+    setAccountError('')
+    setAccountBusy(true)
+    try {
+      const response = await api.patch('/users/me/deactivate')
+      setUserProfile(response.data)
+    } catch (requestError) {
+      setAccountError(requestError.response?.data?.error || requestError.response?.data?.message || 'Could not deactivate your profile.')
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
+  const reactivateProfile = async () => {
+    setAccountError('')
+    setAccountBusy(true)
+    try {
+      const response = await api.patch('/users/me/activate')
+      setUserProfile(response.data)
+    } catch (requestError) {
+      setAccountError(requestError.response?.data?.error || requestError.response?.data?.message || 'Could not reactivate your profile.')
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
+  const deleteProfile = async () => {
+    if (!window.confirm('Permanently delete your account, profile, requests, chats, sessions, and reviews? This cannot be undone.')) return
+    setAccountError('')
+    setAccountBusy(true)
+    try {
+      await api.delete('/users/me')
+      logout()
+      navigate('/', { replace: true })
+    } catch (requestError) {
+      setAccountError(requestError.response?.data?.error || requestError.response?.data?.message || 'Could not permanently delete your profile.')
+      setAccountBusy(false)
+    }
   }
 
   return (
@@ -882,6 +938,19 @@ function ProfilePage() {
         </div>
       </div>
       {skillError && <p className="form-message error" role="alert">{skillError}</p>}
+      <section className="profile-card-block account-actions">
+        <h3>Account visibility and deletion</h3>
+        <p>{user?.active
+          ? 'Hiding your profile keeps your account and exchange history. Your profile will no longer appear in student search.'
+          : 'Your profile is hidden from student search. Reactivate it to receive and send exchange requests again.'}</p>
+        {accountError && <p className="form-message error" role="alert">{accountError}</p>}
+        <div className="request-actions">
+          {user?.active
+            ? <button type="button" className="btn btn-secondary" disabled={accountBusy} onClick={deactivateProfile}>{accountBusy ? 'Updating...' : 'Hide my profile'}</button>
+            : <button type="button" className="btn btn-secondary" disabled={accountBusy} onClick={reactivateProfile}>{accountBusy ? 'Updating...' : 'Reactivate profile'}</button>}
+          <button type="button" className="btn btn-secondary" disabled={accountBusy} onClick={deleteProfile}>Permanently delete account</button>
+        </div>
+      </section>
     </section>
   )
 }
